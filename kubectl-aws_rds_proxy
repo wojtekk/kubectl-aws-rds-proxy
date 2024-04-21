@@ -1,0 +1,149 @@
+#!/bin/bash
+set -euo pipefail
+
+function print_usage() {
+  echo -e "\nUsage:"
+  echo "  $0 local_port:rds_db_identifier"
+  echo -e "\nOptions"
+  echo -e "  --config\tKubectl Config"
+  echo -e "  --context\tKubectl Context"
+  echo -e "  --debug\tPrint debug information"
+  echo -e "  --help\tDisplay help"
+  echo -e "  --namespace\tKubectl Namespace"
+  echo -e "  --version\tPrint version"
+}
+
+kubectl="kubectl"
+version="1.0.0"
+debug=""
+fwd=""
+proxy_image="${KUBECTL_PROXY_PORT_FORWARD_IMAGE:-alpine/socat}"
+proxy_cpu="${KUBECTL_PROXY_PORT_FORWARD_POD_CPU:-100m}"
+proxy_memory="${KUBECTL_PROXY_PORT_FORWARD_POD_MEMORY:-256M}"
+
+# Parse options
+while [ $# -gt 0 ]; do
+  key="$1"
+
+  case $key in
+  --version)
+    echo "kubectl-aws-rds-proxy $version"
+    exit 0
+    ;;
+  --help)
+    print_usage
+    exit 0
+    ;;
+  --debug)
+    debug=true
+    shift
+    ;;
+  --context)
+    kubectl="$kubectl --context $2"
+    shift
+    shift
+    ;;
+  --context=*)
+    kubectl="$kubectl --context=${key##*=}"
+    shift
+    ;;
+  --kubeconfig)
+    kubectl="$kubectl --kube_config $2"
+    shift
+    shift
+    ;;
+  --kubeconfig=*)
+    kubectl="$kubectl --kube_config=${key##*=}"
+    shift
+    ;;
+  --namespace)
+    kubectl="$kubectl --namespace $2"
+    shift
+    shift
+    ;;
+  --namespace=*)
+    kubectl="$kubectl --namespace=${key##*=}"
+    shift
+    ;;
+  --)
+    shift
+    break
+    ;;
+  *)
+    fwd="$fwd $1"
+    shift
+    ;;
+  esac
+done
+
+db_name="$(echo "${fwd#*:}" | xargs)"
+local_port="$(echo "${fwd%%:*}" | xargs)"
+
+if [ -n "$debug" ]; then
+  echo "[debug][k8s] kubectl=$kubectl"
+  echo "[debug][k8s] local_port=$local_port"
+  echo "[debug][aws] db_name=$db_name"
+  echo "[debug][k8s] proxy_image=$proxy_image"
+  echo "[debug][k8s] proxy_cpu=$proxy_cpu"
+  echo "[debug][k8s] proxy_memory=$proxy_memory"
+fi
+
+# Port or DB Identifier is not defined
+if [[ "$local_port" == "$db_name" ]] || [ -z "$local_port" ] || [ -z "$db_name" ]; then
+    echo "Port or AWS RDS DB Identifier name is missing."
+    print_usage && exit 1
+fi
+
+# Check if the port is already in use
+if [ "$(lsof -i:"$local_port" -t)" ]; then
+    echo "Port $local_port is already in use, please specify a different port or kill the process using it."
+    print_usage && exit 2
+fi
+
+# Print AWS Identity
+aws_identity="$(aws sts get-caller-identity --output text  --query "Arn")"
+echo "AWS Identity: $aws_identity"
+
+# Print AWS Profile
+aws_profile="$(aws configure list | grep profile)"
+aws_profile_pattern='[ ]*profile[ ]*([-_a-zA-Z0-9]+)'
+if [[ $aws_profile =~ $aws_profile_pattern ]]; then
+    echo "AWS Profile: ${BASH_REMATCH[1]}"
+fi
+
+# Find AWS RDS Cluster
+echo -ne "\nSearching for AWS RDS Cluster... "
+rds_instance="$(aws rds describe-db-clusters --db-cluster-identifier "$db_name" --query "DBClusters[*].[Endpoint,Port]" 2>/dev/null || true)"
+
+# AWS RDS Cluster not found, search for RDS Instance
+if [ -z "$rds_instance" ]; then
+    echo "Not found"
+
+    echo -n "Searching for AWS RDS Instance... "
+    rds_instance="$(aws rds describe-db-instances --db-instance-identifier "$db_name" --query "DBInstances[*].[Endpoint.Address,Endpoint.Port]" 2>/dev/null || true)"
+
+    # No RDS DB Cluster no Instance
+    if [ -z "$rds_instance" ]; then
+        echo "Not found"
+        echo -e "\nNo such AWS RDS Cluster nor Instance: $db_name"
+
+        print_usage && exit 3
+    else
+        echo "Found"
+    fi
+else
+    echo "Found"
+fi
+
+# Creating tunnel
+rds_host="$(echo "$rds_instance" | jq -r '.[0][0]')"
+rds_port="$(echo "$rds_instance" | jq -r '.[0][1]')"
+kubectl_context="$($kubectl config current-context)"
+echo -e "\nKubectl Context: $kubectl_context"
+tunnel="$local_port:$rds_host:$rds_port"
+echo -e "Creating tunnel: $tunnel\n"
+
+KUBECTL_PROXY_PORT_FORWARD_IMAGE="$proxy_image" \
+KUBECTL_PROXY_PORT_FORWARD_POD_CPU="$proxy_cpu" \
+KUBECTL_PROXY_PORT_FORWARD_POD_MEMORY="$proxy_memory" \
+$kubectl proxy-port-forward "$tunnel"
