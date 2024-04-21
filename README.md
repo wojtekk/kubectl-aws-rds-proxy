@@ -14,7 +14,7 @@ Start socat with proxy in Kubernetes and forward local port to AWS RDS Cluster o
 
 ```bash
 kubectl krew index add wojtekk https://github.com/wojtekk/krew-index
-kubectl krew install wojtek/aws-rds-proxy
+kubectl krew install wojtekk/aws-rds-proxy
 ```
 
 ### Using Curl
