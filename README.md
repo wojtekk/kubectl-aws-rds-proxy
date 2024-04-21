@@ -6,7 +6,7 @@ Start socat with proxy in Kubernetes and forward local port to AWS RDS Cluster o
 
 ### Pre-requirements
 
-* Installed [kubectl proxy-port-forward](https://github.com/kvaps/kubectl-proxy-port-forward)
+* Installed [kubectl net-forward](https://github.com/antitree/krew-net-forward)
 * Installed [jq](https://jqlang.github.io/jq/)
 * Installed and configured AWS Cli
 
@@ -14,6 +14,7 @@ Start socat with proxy in Kubernetes and forward local port to AWS RDS Cluster o
 
 ```bash
 kubectl krew index add wojtekk https://github.com/wojtekk/krew-index
+kubectl krew install net-forward
 kubectl krew install wojtekk/aws-rds-proxy
 ```
 
@@ -32,11 +33,9 @@ Usage:
   kubectl aws-rds-proxy local_port:rds_db_identifier
 
 Options
-  --config      Kubectl Config
-  --context     Kubectl Context
+  --namespace   Kubectl Namespace
   --debug       Print debug information
   --help        Display help
-  --namespace   Kubectl Namespace
   --version     Print version
 ```
 

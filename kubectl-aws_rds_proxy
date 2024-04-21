@@ -5,21 +5,16 @@ function print_usage() {
   echo -e "\nUsage:"
   echo "  $0 local_port:rds_db_identifier"
   echo -e "\nOptions"
-  echo -e "  --config\tKubectl Config"
-  echo -e "  --context\tKubectl Context"
+  echo -e "  --namespace\tKubectl Namespace"
   echo -e "  --debug\tPrint debug information"
   echo -e "  --help\tDisplay help"
-  echo -e "  --namespace\tKubectl Namespace"
   echo -e "  --version\tPrint version"
 }
 
-kubectl="kubectl"
-version="1.0.0"
+version="2.0.0"
+namespace=""
 debug=""
 fwd=""
-proxy_image="${KUBECTL_PROXY_PORT_FORWARD_IMAGE:-alpine/socat}"
-proxy_cpu="${KUBECTL_PROXY_PORT_FORWARD_POD_CPU:-100m}"
-proxy_memory="${KUBECTL_PROXY_PORT_FORWARD_POD_MEMORY:-256M}"
 
 # Parse options
 while [ $# -gt 0 ]; do
@@ -38,31 +33,13 @@ while [ $# -gt 0 ]; do
     debug=true
     shift
     ;;
-  --context)
-    kubectl="$kubectl --context $2"
-    shift
-    shift
-    ;;
-  --context=*)
-    kubectl="$kubectl --context=${key##*=}"
-    shift
-    ;;
-  --kubeconfig)
-    kubectl="$kubectl --kube_config $2"
-    shift
-    shift
-    ;;
-  --kubeconfig=*)
-    kubectl="$kubectl --kube_config=${key##*=}"
-    shift
-    ;;
   --namespace)
-    kubectl="$kubectl --namespace $2"
+    namespace="-n $2"
     shift
     shift
     ;;
   --namespace=*)
-    kubectl="$kubectl --namespace=${key##*=}"
+    namespace="-n ${key##*=}"
     shift
     ;;
   --)
@@ -80,12 +57,8 @@ db_name="$(echo "${fwd#*:}" | xargs)"
 local_port="$(echo "${fwd%%:*}" | xargs)"
 
 if [ -n "$debug" ]; then
-  echo "[debug][k8s] kubectl=$kubectl"
   echo "[debug][k8s] local_port=$local_port"
   echo "[debug][aws] db_name=$db_name"
-  echo "[debug][k8s] proxy_image=$proxy_image"
-  echo "[debug][k8s] proxy_cpu=$proxy_cpu"
-  echo "[debug][k8s] proxy_memory=$proxy_memory"
 fi
 
 # Port or DB Identifier is not defined
@@ -138,12 +111,8 @@ fi
 # Creating tunnel
 rds_host="$(echo "$rds_instance" | jq -r '.[0][0]')"
 rds_port="$(echo "$rds_instance" | jq -r '.[0][1]')"
-kubectl_context="$($kubectl config current-context)"
+kubectl_context="$(kubectl config current-context)"
 echo -e "\nKubectl Context: $kubectl_context"
-tunnel="$local_port:$rds_host:$rds_port"
-echo -e "Creating tunnel: $tunnel\n"
+echo -e "Creating tunnel: $local_port:$rds_host:$rds_port\n"
 
-KUBECTL_PROXY_PORT_FORWARD_IMAGE="$proxy_image" \
-KUBECTL_PROXY_PORT_FORWARD_POD_CPU="$proxy_cpu" \
-KUBECTL_PROXY_PORT_FORWARD_POD_MEMORY="$proxy_memory" \
-$kubectl proxy-port-forward "$tunnel"
+kubectl net-forward -l "$local_port" -i "$rds_host" -p "$rds_port" "$namespace"
